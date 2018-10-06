@@ -63,6 +63,24 @@ import com.google.android.things.contrib.driver.ht16k33.AlphanumericDisplay;
 import com.google.android.things.pio.Gpio;
 import com.google.android.things.pio.PeripheralManager;
 
+import com.google.android.things.iotcore.ConnectionParams;
+import com.google.android.things.iotcore.IotCoreClient;
+import com.google.android.things.iotcore.TelemetryEvent;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+
+import java.io.InputStream;
+import java.io.UnsupportedEncodingException;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.NoSuchAlgorithmException;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.PKCS8EncodedKeySpec;
+
+
 import java.io.IOException;
 
 public class FanControlActivity extends Activity {
@@ -84,9 +102,10 @@ public class FanControlActivity extends Activity {
     private int alphaTweak = 0;
     private int animCounter = 0;
     private boolean mIsConnected;
-    private boolean mIsSimulated = true;
+    private boolean mIsSimulated = false;
 
     private static final int MSG_UPDATE_BAROMETER_UI = 1;
+    private IotCoreClient client;
 
     private final Handler mHandler = new Handler() {
         @Override
@@ -161,6 +180,43 @@ public class FanControlActivity extends Activity {
         }
 
         // Configure the Cloud IoT Connector --
+        int pkId = getResources().getIdentifier("privatekey", "raw", getPackageName());
+        try {
+            if (pkId != 0) {
+                InputStream privateKey = getApplicationContext()
+                        .getResources().openRawResource(pkId);
+                byte[] keyBytes = inputStreamToBytes(privateKey);
+
+                PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(keyBytes);
+                KeyFactory kf = KeyFactory.getInstance("RSA");
+                KeyPair keys = new KeyPair(null, kf.generatePrivate(spec));
+
+                // Configure Cloud IoT Core project information
+                ConnectionParams connectionParams = new ConnectionParams.Builder()
+                        .setProjectId("qwiklabs-gcp-e46e30baa454c1e8")
+                        .setRegistry("tour-registry", "us-central1")
+                        .setDeviceId("test-dev")
+                        .build();
+
+                // Initialize the IoT Core client
+                client = new IotCoreClient.Builder()
+                        .setConnectionParams(connectionParams)
+                        .setKeyPair(keys)
+                        .setOnConfigurationListener(this::onConfigurationReceived)
+                        .build();
+
+                // Connect to Cloud IoT Core
+                client.connect();
+
+                mHandler.post(mTempReportRunnable);
+            }
+        } catch (InvalidKeySpecException ikse) {
+            Log.e(TAG, "INVALID Key spec", ikse);
+        } catch (NoSuchAlgorithmException nsae) {
+            Log.e(TAG, "Algorithm not supported", nsae);
+        } catch (IOException ioe) {
+            Log.e(TAG, "Could not load key from file", ioe);
+        }
     }
 
     @Override
@@ -217,8 +273,51 @@ public class FanControlActivity extends Activity {
         }
 
         // clean up Cloud publisher.
+        if (client != null && client.isConnected()) {
+            client.disconnect();
+        }
     }
+    private static byte[] inputStreamToBytes(InputStream is) throws IOException{
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        int nRead;
+        byte[] data = new byte[16384];
 
+        while ((nRead = is.read(data, 0, data.length)) != -1) {
+            buffer.write(data, 0, nRead);
+        }
+
+        buffer.flush();
+        return buffer.toByteArray();
+    }
+    private void onConfigurationReceived(byte[] bytes) {
+        if (bytes.length == 0) {
+            Log.d(TAG, "Ignoring empty device config event");
+            return;
+        }
+
+        try {
+            JSONObject message = new JSONObject(new String(bytes, "UTF-8"));
+            m_fanOn = message.getBoolean("fan_on");
+            Log.d(TAG, String.format("Config: %s", new String(bytes, "UTF-8")));
+        } catch (JSONException je) {
+            Log.d(TAG, "Could not decode JSON body for config", je);
+        } catch (UnsupportedEncodingException iee) {
+            Log.e(TAG, "Could not decode configuration message", iee);
+        }
+    }
+    private Runnable mTempReportRunnable = new Runnable() {
+        @Override
+        public void run() {
+            Log.d(TAG,"Publishing telemetry event");
+
+            String payload = String.format("{\"temperature\": %d}", (int)m_currTemp);
+            TelemetryEvent event = new TelemetryEvent(payload.getBytes(),
+                    null, TelemetryEvent.QOS_AT_LEAST_ONCE);
+            client.publishTelemetry(event);
+
+            mHandler.postDelayed(mTempReportRunnable, 2000); // Delay 2 secs, repost temp
+        }
+    };
     private Runnable mAnimateRunnable = new Runnable() {
         @Override
         public void run() {
