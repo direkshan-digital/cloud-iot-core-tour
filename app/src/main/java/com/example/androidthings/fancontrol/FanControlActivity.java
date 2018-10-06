@@ -193,9 +193,9 @@ public class FanControlActivity extends Activity {
 
                 // Configure Cloud IoT Core project information
                 ConnectionParams connectionParams = new ConnectionParams.Builder()
-                        .setProjectId("qwiklabs-gcp-e46e30baa454c1e8")
-                        .setRegistry("tour-registry", "us-central1")
-                        .setDeviceId("test-dev")
+                        .setProjectId("<your Google Cloud project ID>")
+                        .setRegistry("<your Cloud IoT Core registry ID>", "<your registry's cloud region>")
+                        .setDeviceId("<the device's ID in the registry>")
                         .build();
 
                 // Initialize the IoT Core client
